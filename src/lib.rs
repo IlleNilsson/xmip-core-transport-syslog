@@ -22,6 +22,7 @@ use std::time::Duration;
 
 pub use message::Header;
 use transport::error::{Result, classify, protocol_error};
+use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
 use transport::{Arrived, Directions, Transport};
 
@@ -37,6 +38,7 @@ pub enum Carrier {
     Tcp,
 }
 
+#[derive(Clone)]
 pub struct SyslogTransport {
     bind: String,
     carrier: Carrier,
@@ -265,6 +267,63 @@ impl Transport for SyslogTransport {
     }
 }
 
+impl SyslogTransport {
+    /// Both ends on this machine: a collector over TCP with octet counting
+    /// on an ephemeral local port — the carrier that holds a megabyte; the
+    /// datagram carrier is the one bound by default and it is exercised in
+    /// the tests — with the loopback timeout on the accept.
+    #[must_use]
+    pub fn loopback() -> Self {
+        Self::new("127.0.0.1:0", "loopback", "xmip")
+            .over(Carrier::Tcp)
+            .timing_out_after(LOOPBACK_TIMEOUT)
+    }
+}
+
+/// A bound collector waiting for its one sender's one message.
+struct Listening {
+    transport: SyslogTransport,
+    listener: TcpListener,
+    address: String,
+}
+
+impl FarEnd for Listening {
+    fn address(&self) -> &str {
+        &self.address
+    }
+
+    fn take_one(self: Box<Self>) -> Result<Arrived> {
+        let mut connection = self.transport.accept_one(&self.listener)?;
+        connection
+            .next_message()?
+            .ok_or_else(|| protocol_error("the sender closed without a message"))
+    }
+}
+
+impl Loopback for SyslogTransport {
+    /// A payload that already is a syslog message is sent as it is, and what
+    /// arrives is its MSG: the header is the origin, never the Stream.
+    fn refuses(&self, payload: &[u8]) -> Option<String> {
+        (payload.starts_with(b"<") && message::parse(payload).is_ok()).then(|| {
+            "already a syslog message: sent as it is, and its MSG is what arrives".to_string()
+        })
+    }
+
+    fn far_end(&self) -> Result<Box<dyn FarEnd>> {
+        let (listener, address) = self.bind_tcp()?;
+        Ok(Box::new(Listening {
+            transport: self.clone(),
+            listener,
+            address,
+        }))
+    }
+
+    fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
+        Self::new("127.0.0.1:0", &self.hostname, &self.app_name)
+            .send(&format!("syslog+tcp://{address}"), payload)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +331,49 @@ mod tests {
     fn node() -> SyslogTransport {
         SyslogTransport::new("127.0.0.1:0", "edge-01", "xmip")
             .timing_out_after(Duration::from_secs(2))
+    }
+
+    /// The shapes a transport is most likely to change: nothing, one byte,
+    /// every byte value, a run of NULs, high bytes, and line endings alone.
+    fn edge_payloads() -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            ("empty", Vec::new()),
+            ("one byte", vec![0x2a]),
+            ("every byte", (0..=255).collect()),
+            ("nul run", vec![0; 512]),
+            ("high bytes", vec![0xff; 512]),
+            ("crlf storm", b"\r\n".repeat(400)),
+        ]
+    }
+
+    #[test]
+    fn the_loopback_carries_a_stream_as_one_counted_message() {
+        let collector = SyslogTransport::loopback();
+        let arrived = collector.round(b"counted\nwith newline").expect("round");
+        assert_eq!(arrived.bytes, b"counted\nwith newline");
+        assert!(arrived.origin_uri.starts_with("syslog://127.0.0.1:"));
+        assert!(
+            arrived
+                .origin_uri
+                .contains("facility=16&severity=6&host=loopback&app=xmip")
+        );
+        let long = vec![0x2a; 100_000];
+        assert_eq!(collector.round(&long).expect("long").bytes, long);
+    }
+
+    #[test]
+    fn the_loopback_returns_the_edge_payloads_whole_and_refuses_a_message() {
+        let collector = SyslogTransport::loopback();
+        assert!(collector.ceiling().is_none());
+        for (name, bytes) in edge_payloads() {
+            assert!(collector.refuses(&bytes).is_none(), "{name}");
+            assert_eq!(collector.round(&bytes).expect(name).bytes, bytes, "{name}");
+        }
+        // A declared refusal is true: a message goes as it is and its MSG
+        // is what comes back.
+        let already = b"<13>1 - other app - - - already";
+        assert!(collector.refuses(already).is_some());
+        assert_eq!(collector.round(already).expect("as-is").bytes, b"already");
     }
 
     #[test]
@@ -300,29 +402,21 @@ mod tests {
     fn a_tcp_sender_frames_by_octet_count_or_by_line() {
         let far_end = node().over(Carrier::Tcp);
         let (listener, address) = far_end.bind_tcp().expect("binding");
-        let sender = std::thread::spawn(move || {
-            let near = node().over(Carrier::Tcp);
-            near.send(&address, b"counted\nwith newline")?;
-            near.send(&format!("syslog+tcp://{address}"), b"")
-        });
-        let mut connection = far_end.accept_one(&listener).expect("accepting");
-        let first = connection.next_message().expect("first").expect("one");
-        assert_eq!(first.bytes, b"counted\nwith newline");
-        assert!(connection.next_message().expect("closed").is_none());
-        let mut connection = far_end.accept_one(&listener).expect("second");
-        let second = connection.next_message().expect("second").expect("one");
-        assert!(second.bytes.is_empty());
-        sender.join().expect("thread").expect("sending");
-
-        let mut stream =
-            TcpStream::connect(listener.local_addr().expect("address")).expect("connecting");
+        let mut stream = TcpStream::connect(&address).expect("connecting");
+        let counted = b"<34>1 - - - - - - counted\nwith newline";
+        stream
+            .write_all(format!("{} ", counted.len()).as_bytes())
+            .expect("writing the count");
+        stream.write_all(counted).expect("writing the counted");
         stream
             .write_all(b"<34>1 - - - - - - line one\n<34>1 - - - - - - line two\r\n")
-            .expect("writing");
+            .expect("writing the lines");
         drop(stream);
-        let mut connection = far_end.accept_one(&listener).expect("third");
+        let mut connection = far_end.accept_one(&listener).expect("accepting");
+        let first = connection.next_message().expect("first").expect("one");
         let one = connection.next_message().expect("one").expect("one");
         let two = connection.next_message().expect("two").expect("two");
+        assert_eq!(first.bytes, b"counted\nwith newline");
         assert_eq!(one.bytes, b"line one");
         assert_eq!(two.bytes, b"line two");
         assert!(connection.next_message().expect("closed").is_none());
