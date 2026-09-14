@@ -22,6 +22,7 @@ use std::time::Duration;
 
 pub use message::Header;
 use transport::error::{Result, classify, protocol_error};
+use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
 use transport::{Arrived, Directions, Transport};
@@ -280,20 +281,9 @@ impl SyslogTransport {
     }
 }
 
-/// A bound collector waiting for its one sender's one message.
-struct Listening {
-    transport: SyslogTransport,
-    listener: TcpListener,
-    address: String,
-}
-
-impl FarEnd for Listening {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        let mut connection = self.transport.accept_one(&self.listener)?;
+impl Accepting for SyslogTransport {
+    fn take_one(&self, listener: &TcpListener) -> Result<Arrived> {
+        let mut connection = self.accept_one(listener)?;
         connection
             .next_message()?
             .ok_or_else(|| protocol_error("the sender closed without a message"))
@@ -311,11 +301,7 @@ impl Loopback for SyslogTransport {
 
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         let (listener, address) = self.bind_tcp()?;
-        Ok(Box::new(Listening {
-            transport: self.clone(),
-            listener,
-            address,
-        }))
+        Ok(Box::new(Listening::new(self.clone(), listener, address)))
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
@@ -327,23 +313,11 @@ impl Loopback for SyslogTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use transport::payload::edge_payloads;
 
     fn node() -> SyslogTransport {
         SyslogTransport::new("127.0.0.1:0", "edge-01", "xmip")
             .timing_out_after(Duration::from_secs(2))
-    }
-
-    /// The shapes a transport is most likely to change: nothing, one byte,
-    /// every byte value, a run of NULs, high bytes, and line endings alone.
-    fn edge_payloads() -> Vec<(&'static str, Vec<u8>)> {
-        vec![
-            ("empty", Vec::new()),
-            ("one byte", vec![0x2a]),
-            ("every byte", (0..=255).collect()),
-            ("nul run", vec![0; 512]),
-            ("high bytes", vec![0xff; 512]),
-            ("crlf storm", b"\r\n".repeat(400)),
-        ]
     }
 
     #[test]
