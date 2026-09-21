@@ -253,8 +253,10 @@ impl Transport for SyslogTransport {
                 Ok(())
             }
             Carrier::Tcp => {
-                let mut stream = TcpStream::connect(address)
-                    .map_err(|e| classify("connecting to the collector", &e))?;
+                // The connect is bounded as well as the reads. It was bare
+                // until 2026-09-21, and a machine out of ephemeral ports
+                // waited without end.
+                let mut stream = socket::connect_tcp(address, self.timeout)?;
                 let mut frame = format!("{} ", message.len()).into_bytes();
                 frame.extend_from_slice(&message);
                 stream
