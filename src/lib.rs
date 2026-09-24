@@ -284,7 +284,7 @@ impl SyslogTransport {
 }
 
 impl Accepting for SyslogTransport {
-    fn take_one(&self, listener: &TcpListener) -> Result<Arrived> {
+    fn take_one(self, listener: &TcpListener) -> Result<Arrived> {
         let mut connection = self.accept_one(listener)?;
         connection
             .next_message()?
@@ -302,8 +302,7 @@ impl Loopback for SyslogTransport {
     }
 
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        let (listener, address) = self.bind_tcp()?;
-        Ok(Box::new(Listening::new(self.clone(), listener, address)))
+        Ok(Box::new(Listening::new(self.clone(), self.bind_tcp()?)))
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
