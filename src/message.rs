@@ -8,6 +8,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use codec::civil::CivilTime;
 use transport::error::{Result, protocol_error};
 
 /// Everything before MSG.
@@ -175,31 +176,13 @@ fn nil_if_empty(value: &str) -> String {
 /// Now, as RFC 5424 writes it: `2026-09-08T10:30:00.123456Z`.
 #[must_use]
 pub fn timestamp_now() -> String {
-    let since = SystemTime::now()
+    let now = SystemTime::now();
+    let micros = now
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let (date, time) = civil(since.as_secs());
-    format!("{date}T{time}.{:06}Z", since.subsec_micros())
-}
-
-/// Seconds since the epoch to `YYYY-MM-DD` and `HH:MM:SS`, proleptic
-/// Gregorian, Howard Hinnant's algorithm.
-fn civil(seconds: u64) -> (String, String) {
-    let days = i64::try_from(seconds / 86_400).unwrap_or(0);
-    let rem = seconds % 86_400;
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (
-        format!("{year:04}-{month:02}-{day:02}"),
-        format!("{:02}:{:02}:{:02}", rem / 3600, (rem % 3600) / 60, rem % 60),
-    )
+        .unwrap_or_default()
+        .subsec_micros();
+    let whole = CivilTime::from_system_time(now).rfc3339();
+    format!("{}.{micros:06}Z", whole.trim_end_matches('Z'))
 }
 
 #[cfg(test)]
@@ -245,11 +228,10 @@ mod tests {
 
     #[test]
     fn the_timestamp_is_utc_iso_8601() {
-        let (date, time) = civil(1_788_000_000);
-        assert_eq!(date, "2026-08-29");
-        assert_eq!(time, "10:40:00");
-        assert_eq!(civil(0), ("1970-01-01".to_string(), "00:00:00".to_string()));
-        assert!(timestamp_now().ends_with('Z'));
+        let now = timestamp_now();
+        assert_eq!(now.len(), "2026-08-29T10:40:00.000000Z".len(), "{now}");
+        assert_eq!(&now[10..11], "T");
+        assert!(now.ends_with('Z'));
         assert_eq!(Header::now(1, 6, "", "").hostname, "-");
     }
 }
