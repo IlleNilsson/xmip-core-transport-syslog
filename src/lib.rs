@@ -25,6 +25,7 @@ pub use message::Header;
 use net::{MAX_BODY, read};
 use transport::ceiling;
 use transport::error::{Result, classify, protocol_error};
+use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::sender::Sender;
@@ -58,6 +59,10 @@ pub struct SyslogTransport {
     timeout: Option<Duration>,
     /// The socket every send leaves from, bound once.
     sender: Sender,
+    /// What the first receive binds for the carrier, and every receive
+    /// takes from: the datagram socket, or the listener.
+    datagrams: Kept<UdpSocket>,
+    connections: Kept<TcpListener>,
 }
 
 impl SyslogTransport {
@@ -75,6 +80,8 @@ impl SyslogTransport {
             severity: SEVERITY,
             timeout: None,
             sender: Sender::new(),
+            datagrams: Kept::new(),
+            connections: Kept::new(),
         }
     }
 
@@ -218,16 +225,17 @@ impl Transport for SyslogTransport {
         Directions::BOTH
     }
 
-    /// One datagram, or one TCP sender's messages until it closes.
+    /// One datagram, or one TCP sender's messages until it closes, from the
+    /// socket or listener the first receive bound and kept.
     fn receive(&self) -> Result<Vec<Arrived>> {
         match self.carrier {
             Carrier::Udp => {
-                let (socket, _) = self.bind_udp()?;
-                Ok(vec![self.receive_datagram(&socket)?])
+                let socket = self.datagrams.bound(|| self.bind_udp())?;
+                Ok(vec![self.receive_datagram(socket)?])
             }
             Carrier::Tcp => {
-                let (listener, _) = self.bind_tcp()?;
-                let mut connection = self.accept_one(&listener)?;
+                let listener = self.connections.bound(|| self.bind_tcp())?;
+                let mut connection = self.accept_one(listener)?;
                 let mut arrived = Vec::new();
                 while let Some(message) = connection.next_message()? {
                     arrived.push(message);
@@ -322,6 +330,28 @@ mod tests {
     fn node() -> SyslogTransport {
         SyslogTransport::new("127.0.0.1:0", "edge-01", "xmip")
             .timing_out_after(Duration::from_secs(2))
+    }
+
+    #[test]
+    fn every_receive_takes_from_what_the_first_bound_over_either_carrier() {
+        let over_udp = node();
+        over_udp
+            .datagrams
+            .bound(|| over_udp.bind_udp())
+            .expect("bound");
+        let address = over_udp.datagrams.address().expect("address");
+        transport::kept::held_across_receives(&over_udp, address, 5, |at, payload| {
+            node().send(&format!("syslog://{at}"), payload)
+        });
+        let over_tcp = SyslogTransport::loopback();
+        over_tcp
+            .connections
+            .bound(|| over_tcp.bind_tcp())
+            .expect("bound");
+        let address = over_tcp.connections.address().expect("address");
+        transport::kept::held_across_receives(&over_tcp, address, 5, |at, payload| {
+            over_tcp.send_to(at, payload)
+        });
     }
 
     #[test]
