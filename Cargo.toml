@@ -23,6 +23,9 @@ transport = { package = "xmip-core-transport", git = "https://github.com/IlleNil
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
 # The estate's encoding primitives: the civil calendar a timestamp is written from.
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+# A frame read under its ceiling (`net::read`, `net::MAX_BODY`), octet-counted
+# or ended by a line feed.
+net = { package = "xmip-core-library-net", git = "https://github.com/IlleNilsson/xmip-core-library-net", branch = "main" }
 
 [dev-dependencies]
 # The loopback payloads the tests drive, from the capability's test
