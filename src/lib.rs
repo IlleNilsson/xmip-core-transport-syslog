@@ -27,6 +27,7 @@ use transport::ceiling;
 use transport::error::{Result, classify, protocol_error};
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
+use transport::sender::Sender;
 use transport::socket;
 use transport::{Arrived, Directions, Transport};
 
@@ -55,6 +56,8 @@ pub struct SyslogTransport {
     facility: u8,
     severity: u8,
     timeout: Option<Duration>,
+    /// The socket every send leaves from, bound once.
+    sender: Sender,
 }
 
 impl SyslogTransport {
@@ -71,6 +74,7 @@ impl SyslogTransport {
             facility: FACILITY,
             severity: SEVERITY,
             timeout: None,
+            sender: Sender::new(),
         }
     }
 
@@ -249,12 +253,7 @@ impl Transport for SyslogTransport {
                 if message.len() > MAX_DATAGRAM {
                     return Err(protocol_error("a message over what a datagram carries"));
                 }
-                let socket = UdpSocket::bind("0.0.0.0:0")
-                    .map_err(|e| classify("binding the sending socket", &e))?;
-                socket
-                    .send_to(&message, address)
-                    .map_err(|e| classify("sending the datagram", &e))?;
-                Ok(())
+                self.sender.send_to(&message, address)
             }
             Carrier::Tcp => {
                 // The connect is bounded as well as the reads. It was bare
