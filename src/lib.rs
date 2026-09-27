@@ -15,6 +15,7 @@
 //! `syslog://peer?facility=16&severity=6&host=edge-01&app=xmip&msgid=-`.
 
 pub mod message;
+mod settings;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
@@ -31,6 +32,12 @@ use transport::{Arrived, Directions, Transport};
 pub const MAX_DATAGRAM: usize = 65_535;
 /// The most an octet-counted frame may say before it is refused.
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
+/// The facility a wrapped payload is sent under unless told otherwise: 16,
+/// local0.
+pub const FACILITY: u8 = 16;
+/// The severity a wrapped payload is sent under unless told otherwise: 6,
+/// informational.
+pub const SEVERITY: u8 = 6;
 
 /// UDP datagrams, or TCP with octet counting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,8 +59,8 @@ pub struct SyslogTransport {
 
 impl SyslogTransport {
     /// Listen at `bind` over UDP; `0.0.0.0:514` is the standard port.
-    /// Messages sent name `hostname` and `app_name`, facility 16 (local0),
-    /// severity 6 (informational).
+    /// Messages sent name `hostname` and `app_name`, under [`FACILITY`] and
+    /// [`SEVERITY`].
     #[must_use]
     pub fn new(bind: impl Into<String>, hostname: &str, app_name: &str) -> Self {
         Self {
@@ -61,8 +68,8 @@ impl SyslogTransport {
             carrier: Carrier::Udp,
             hostname: hostname.to_string(),
             app_name: app_name.to_string(),
-            facility: 16,
-            severity: 6,
+            facility: FACILITY,
+            severity: SEVERITY,
             timeout: None,
         }
     }
