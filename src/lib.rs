@@ -22,6 +22,8 @@ use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::time::Duration;
 
 pub use message::Header;
+use net::{MAX_BODY, read};
+use transport::ceiling;
 use transport::error::{Result, classify, protocol_error};
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
@@ -30,8 +32,6 @@ use transport::{Arrived, Directions, Transport};
 
 /// The largest datagram a syslog receiver must take, RFC 5426.
 pub const MAX_DATAGRAM: usize = 65_535;
-/// The most an octet-counted frame may say before it is refused.
-pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 /// The facility a wrapped payload is sent under unless told otherwise: 16,
 /// local0.
 pub const FACILITY: u8 = 16;
@@ -158,8 +158,8 @@ impl Connection {
     /// The next message, or `None` when the sender closed between messages.
     ///
     /// # Errors
-    /// A frame that breaks off, a count over [`MAX_FRAME`], or a message that
-    /// is not RFC 5424.
+    /// A frame that breaks off, a count or a line over `net::MAX_BODY`, or a
+    /// message that is not RFC 5424.
     pub fn next_message(&mut self) -> Result<Option<Arrived>> {
         let first = match self.reader.fill_buf() {
             Ok([]) => return Ok(None),
@@ -167,17 +167,16 @@ impl Connection {
             Err(error) => return Err(classify("reading a frame", &error)),
         };
         let raw = if first.is_ascii_digit() {
+            // The count and its space: no count Xmip reads has more digits
+            // than the ceiling itself.
+            let digits = usize::try_from(MAX_BODY.ilog10()).unwrap_or(usize::MAX) + 2;
             let mut count = Vec::new();
-            self.reader
-                .read_until(b' ', &mut count)
-                .map_err(|e| classify("reading the octet count", &e))?;
+            read::until(&mut self.reader, b' ', digits, &mut count)?;
             let count: usize = std::str::from_utf8(&count)
                 .ok()
                 .and_then(|c| c.trim().parse().ok())
                 .ok_or_else(|| protocol_error("an octet count that is not a number"))?;
-            if count > MAX_FRAME {
-                return Err(protocol_error("an octet count over what Xmip will read"));
-            }
+            ceiling::within(count, MAX_BODY, "Xmip reads in one frame")?;
             let mut raw = vec![0u8; count];
             self.reader
                 .read_exact(&mut raw)
@@ -185,9 +184,7 @@ impl Connection {
             raw
         } else {
             let mut raw = Vec::new();
-            self.reader
-                .read_until(b'\n', &mut raw)
-                .map_err(|e| classify("reading the message", &e))?;
+            read::until(&mut self.reader, b'\n', MAX_BODY, &mut raw)?;
             while raw.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
                 raw.pop();
             }
