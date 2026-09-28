@@ -175,7 +175,7 @@ fn nil_if_empty(value: &str) -> String {
 
 /// Now, as RFC 5424 writes it: `2026-09-08T10:30:00.123456Z`.
 #[must_use]
-pub fn timestamp_now() -> String {
+fn timestamp_now() -> String {
     let now = SystemTime::now();
     let micros = now
         .duration_since(UNIX_EPOCH)
