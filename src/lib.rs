@@ -22,8 +22,8 @@ use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::time::Duration;
 
 pub use message::Header;
-use net::{MAX_BODY, read};
-use transport::ceiling;
+use net::ceiling;
+use net::{MAX_BODY, Target, read};
 use transport::error::{Result, classify, protocol_error};
 use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
@@ -248,12 +248,10 @@ impl Transport for SyslogTransport {
     /// To `syslog://host:514`, `syslog+tcp://host:514`, or `host:port` over
     /// the configured carrier.
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        let (carrier, address) = if let Some(rest) = target.strip_prefix("syslog+tcp://") {
-            (Carrier::Tcp, rest)
-        } else if let Some(rest) = target.strip_prefix("syslog://") {
-            (Carrier::Udp, rest)
-        } else {
-            (self.carrier, target)
+        let (carrier, address) = match Target::under(&["syslog", "syslog+tcp"], target) {
+            Some(named) if named.is(&["syslog+tcp"]) => (Carrier::Tcp, named.authority()),
+            Some(named) => (Carrier::Udp, named.authority()),
+            None => (self.carrier, target),
         };
         let message = self.compose(bytes);
         match carrier {
