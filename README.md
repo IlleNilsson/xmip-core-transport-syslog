@@ -8,6 +8,13 @@ A Receive Location keeps what it binds for its carrier on the first receive (`tr
 
 A send target is read by `net::Target` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net), the one reading of a URI every technology calls. Until 2026-09-28 this technology stripped its scheme by hand.
 
+## Acknowledgement
+
+Acceptance is at-most-once here. Neither carrier answers a message: a datagram
+has nobody to answer, and RFC 6587 over TCP has no acknowledgement either, so
+the sender is never told how the receive cycle ended and a crash before the
+Stream is durable loses it. Each message arrives whole.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it

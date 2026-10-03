@@ -13,6 +13,11 @@
 //!
 //! The origin URI carries what the header knew:
 //! `syslog://peer?facility=16&severity=6&host=edge-01&app=xmip&msgid=-`.
+//!
+//! **Acceptance is at-most-once here** ([`AT_MOST_ONCE`]): neither carrier
+//! answers a message — a datagram has nobody to answer, and RFC 6587 over
+//! TCP has no acknowledgement either — so the sender is never told how the
+//! receive cycle ended. Each message arrives whole.
 
 pub mod message;
 mod settings;
@@ -30,7 +35,11 @@ use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::sender::Sender;
 use transport::socket;
-use transport::{Arrived, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Directions, Taken, Transport};
+
+/// Why a syslog message cannot be acknowledged after the receive cycle.
+pub const AT_MOST_ONCE: &str = "syslog answers no message: a datagram has nobody to answer, and \
+                                RFC 6587 over TCP has no acknowledgement";
 
 /// The largest datagram a syslog receiver must take, RFC 5426.
 pub const MAX_DATAGRAM: usize = 65_535;
@@ -205,14 +214,16 @@ impl Connection {
     }
 }
 
+/// One message, whole; acceptance is at-most-once ([`AT_MOST_ONCE`]).
 fn arrived(peer: SocketAddr, raw: &[u8]) -> Result<Arrived> {
     let (header, msg) = message::parse(raw)?;
-    Ok(Arrived::new(
+    Ok(Arrived::whole(
         format!(
             "syslog://{peer}?facility={}&severity={}&host={}&app={}&msgid={}",
             header.facility, header.severity, header.hostname, header.app_name, header.msg_id
         ),
         msg,
+        Acknowledgement::at_most_once(AT_MOST_ONCE),
     ))
 }
 
@@ -225,8 +236,13 @@ impl Transport for SyslogTransport {
         Directions::BOTH
     }
 
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Unordered("each message is its own, at-most-once")
+    }
+
     /// One datagram, or one TCP sender's messages until it closes, from the
-    /// socket or listener the first receive bound and kept.
+    /// socket or listener the first receive bound and kept. Acceptance is
+    /// at-most-once here: syslog answers no message ([`AT_MOST_ONCE`]).
     fn receive(&self) -> Result<Vec<Arrived>> {
         match self.carrier {
             Carrier::Udp => {
@@ -293,11 +309,12 @@ impl SyslogTransport {
 }
 
 impl Accepting for SyslogTransport {
-    fn take_one(self, listener: &TcpListener) -> Result<Arrived> {
+    fn take_one(self, listener: &TcpListener) -> Result<Taken> {
         let mut connection = self.accept_one(listener)?;
         connection
             .next_message()?
-            .ok_or_else(|| protocol_error("the sender closed without a message"))
+            .ok_or_else(|| protocol_error("the sender closed without a message"))?
+            .taken()
     }
 }
 
@@ -390,6 +407,8 @@ mod tests {
             .send(&format!("syslog://{address}"), b"ping\r\npong")
             .expect("sending");
         let arrived = far_end.receive_datagram(&socket).expect("receiving");
+        assert!(!arrived.defers(), "syslog is at-most-once");
+        let arrived = arrived.taken().expect("taken");
         assert_eq!(arrived.bytes, b"ping\r\npong");
         assert!(
             arrived
@@ -400,6 +419,7 @@ mod tests {
             .send(&address, b"<13>1 - other app - - - already")
             .expect("as-is");
         let arrived = far_end.receive_datagram(&socket).expect("receiving");
+        let arrived = arrived.taken().expect("taken");
         assert_eq!(arrived.bytes, b"already");
         assert!(arrived.origin_uri.contains("severity=5&host=other&app=app"));
     }
@@ -419,9 +439,12 @@ mod tests {
             .expect("writing the lines");
         drop(stream);
         let mut connection = far_end.accept_one(&listener).expect("accepting");
-        let first = connection.next_message().expect("first").expect("one");
-        let one = connection.next_message().expect("one").expect("one");
-        let two = connection.next_message().expect("two").expect("two");
+        let mut next = || {
+            let arrived = connection.next_message().expect("read").expect("one");
+            assert!(!arrived.defers(), "syslog over TCP is at-most-once");
+            arrived.taken().expect("taken")
+        };
+        let (first, one, two) = (next(), next(), next());
         assert_eq!(first.bytes, b"counted\nwith newline");
         assert_eq!(one.bytes, b"line one");
         assert_eq!(two.bytes, b"line two");
