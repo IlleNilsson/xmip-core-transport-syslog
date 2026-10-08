@@ -29,6 +29,7 @@ use std::time::Duration;
 pub use message::Header;
 use net::ceiling;
 use net::{MAX_BODY, Target, read};
+use transport::ArrivalIdentity;
 use transport::error::{Result, classify, protocol_error};
 use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
@@ -224,7 +225,8 @@ fn arrived(peer: SocketAddr, raw: &[u8]) -> Result<Arrived> {
         ),
         msg,
         Acknowledgement::at_most_once(AT_MOST_ONCE),
-    ))
+    )
+    .from_peer(peer))
 }
 
 impl Transport for SyslogTransport {
@@ -319,6 +321,10 @@ impl Accepting for SyslogTransport {
 }
 
 impl Loopback for SyslogTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::PEER
+    }
+
     /// A payload that already is a syslog message is sent as it is, and what
     /// arrives is its MSG: the header is the origin, never the Stream.
     fn refuses(&self, payload: &[u8]) -> Option<String> {
