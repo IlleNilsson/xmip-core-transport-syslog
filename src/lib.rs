@@ -242,6 +242,10 @@ impl Transport for SyslogTransport {
         transport::Arrivals::Unordered("each message is its own, at-most-once")
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Waits("a read of the socket or the accept waits for a sender")
+    }
+
     /// One datagram, or one TCP sender's messages until it closes, from the
     /// socket or listener the first receive bound and kept. Acceptance is
     /// at-most-once here: syslog answers no message ([`AT_MOST_ONCE`]).
