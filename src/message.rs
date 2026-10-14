@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(msg, b"ping\r\npong");
         let bare = format(&header, b"");
         let (_, empty) = parse(&bare).expect("no msg");
-        assert!(empty.is_empty());
+        assert_eq!(empty, []);
     }
 
     #[test]
@@ -223,7 +223,7 @@ mod tests {
         assert!(parse(b"<34>1 - - - - - -x").is_err(), "no space");
         let (header, msg) = parse(b"<34>1 - - - - - - ").expect("empty msg");
         assert_eq!((header.facility, header.severity), (4, 2));
-        assert!(msg.is_empty());
+        assert_eq!(msg, []);
     }
 
     #[test]
