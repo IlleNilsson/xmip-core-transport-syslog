@@ -13,7 +13,9 @@ A send target is read by `net::Target` in [xmip-core-library-net](https://github
 Acceptance is at-most-once here. Neither carrier answers a message: a datagram
 has nobody to answer, and RFC 6587 over TCP has no acknowledgement either, so
 the sender is never told how the receive cycle ended and a crash before the
-Stream is durable loses it. Each message arrives whole.
+Stream is durable loses it. Each message arrives whole. A receive takes every message its connection carries, whatever room the
+runtime gives it (`Transport::receive_up_to`): the sender let go of each as
+it sent it, so none can wait at the far end.
 
 ## Toolchain
 
