@@ -249,7 +249,7 @@ impl Transport for SyslogTransport {
     /// One datagram, or one TCP sender's messages until it closes, from the
     /// socket or listener the first receive bound and kept. Acceptance is
     /// at-most-once here: syslog answers no message ([`AT_MOST_ONCE`]).
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         match self.carrier {
             Carrier::Udp => {
                 let socket = self.datagrams.bound(|| self.bind_udp())?;
@@ -267,9 +267,14 @@ impl Transport for SyslogTransport {
         }
     }
 
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered("one syslog message carries the whole body")
+    }
+
     /// To `syslog://host:514`, `syslog+tcp://host:514`, or `host:port` over
     /// the configured carrier.
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        let bytes: &[u8] = &outgoing.gather()?;
         let (carrier, address) = match Target::under(&["syslog", "syslog+tcp"], target) {
             Some(named) if named.is(&["syslog+tcp"]) => (Carrier::Tcp, named.authority()),
             Some(named) => (Carrier::Udp, named.authority()),
