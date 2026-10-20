@@ -133,7 +133,7 @@ fn word<'a>(rest: &'a [u8], at: &mut usize) -> Option<&'a [u8]> {
     Some(&rest[start..end])
 }
 
-/// `-`, or every `[...]` element, quotes and escapes honoured.
+/// `-`, or every `[...]` element, quotes and escapes honored.
 fn structured_data(rest: &[u8], at: &mut usize) -> Result<String> {
     if rest.get(*at) == Some(&b'-') {
         *at += 1;
