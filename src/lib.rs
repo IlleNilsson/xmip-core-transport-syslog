@@ -18,25 +18,35 @@
 //! answers a message — a datagram has nobody to answer, and RFC 6587 over
 //! TCP has no acknowledgement either — so the sender is never told how the
 //! receive cycle ended. Each message arrives whole.
+//!
+//! **Over TCP both ends keep the connection.** A Send Location keeps one
+//! per collector in the capability's pool (`transport::Pool`), message after
+//! message; a Receive Location keeps its senders' connections beside its
+//! listener, each framed message one turn ([`connection`]). Until
+//! 2026-10-21 every send opened a connection of its own.
 
+pub mod connection;
 pub mod message;
 mod settings;
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::time::Duration;
 
+pub use connection::Connection;
 pub use message::Header;
-use net::ceiling;
-use net::{MAX_BODY, Target, read};
+use net::Target;
 use transport::ArrivalIdentity;
 use transport::error::{Result, classify, protocol_error};
 use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
+use transport::pool::alive;
 use transport::sender::Sender;
+use transport::serving::Serving;
 use transport::socket;
 use transport::{Acknowledgement, Arrived, Directions, Taken, Transport};
+use transport::{Pool, Pooled};
 
 /// Why a syslog message cannot be acknowledged after the receive cycle.
 pub const AT_MOST_ONCE: &str = "syslog answers no message: a datagram has nobody to answer, and \
@@ -67,12 +77,28 @@ pub struct SyslogTransport {
     facility: u8,
     severity: u8,
     timeout: Option<Duration>,
-    /// The socket every send leaves from, bound once.
+    /// The socket every datagram send leaves from, bound once.
     sender: Sender,
+    /// The connection kept to each collector over TCP, shared by every
+    /// clone.
+    collectors: Pool<Collector>,
     /// What the first receive binds for the carrier, and every receive
-    /// takes from: the datagram socket, or the listener.
+    /// takes from: the datagram socket, or the listener and the senders'
+    /// connections kept open on it.
     datagrams: Kept<UdpSocket>,
-    connections: Kept<TcpListener>,
+    connections: Serving<Connection>,
+}
+
+/// A Send Location's connection to one collector over TCP, kept between
+/// its messages.
+struct Collector(TcpStream);
+
+impl Pooled for Collector {
+    /// A collector answers nothing, so only its close lets the connection
+    /// go: a write to it could succeed and be lost.
+    fn usable(&mut self) -> bool {
+        alive(&self.0)
+    }
 }
 
 impl SyslogTransport {
@@ -90,8 +116,9 @@ impl SyslogTransport {
             severity: SEVERITY,
             timeout: None,
             sender: Sender::new(),
+            collectors: Pool::new(),
             datagrams: Kept::new(),
-            connections: Kept::new(),
+            connections: Serving::new(),
         }
     }
 
@@ -151,10 +178,7 @@ impl SyslogTransport {
     /// Where the connection could not be accepted.
     pub fn accept_one(&self, listener: &TcpListener) -> Result<Connection> {
         let (stream, peer) = socket::accept_tcp(listener, self.timeout)?;
-        Ok(Connection {
-            reader: BufReader::new(stream),
-            peer,
-        })
+        Ok(Connection::new(stream, peer))
     }
 
     /// `bytes` as a syslog message: as they are when they already are one,
@@ -169,54 +193,8 @@ impl SyslogTransport {
     }
 }
 
-/// One TCP sender's messages, octet-counted or newline-terminated, RFC 6587.
-pub struct Connection {
-    reader: BufReader<TcpStream>,
-    peer: SocketAddr,
-}
-
-impl Connection {
-    /// The next message, or `None` when the sender closed between messages.
-    ///
-    /// # Errors
-    /// A frame that breaks off, a count or a line over `net::MAX_BODY`, or a
-    /// message that is not RFC 5424.
-    pub fn next_message(&mut self) -> Result<Option<Arrived>> {
-        let first = match self.reader.fill_buf() {
-            Ok([]) => return Ok(None),
-            Ok(buffer) => buffer[0],
-            Err(error) => return Err(classify("reading a frame", &error)),
-        };
-        let raw = if first.is_ascii_digit() {
-            // The count and its space: no count Xmip reads has more digits
-            // than the ceiling itself.
-            let digits = usize::try_from(MAX_BODY.ilog10()).unwrap_or(usize::MAX) + 2;
-            let mut count = Vec::new();
-            read::until(&mut self.reader, b' ', digits, &mut count)?;
-            let count: usize = std::str::from_utf8(&count)
-                .ok()
-                .and_then(|c| c.trim().parse().ok())
-                .ok_or_else(|| protocol_error("an octet count that is not a number"))?;
-            ceiling::within(count, MAX_BODY, "Xmip reads in one frame")?;
-            let mut raw = vec![0u8; count];
-            self.reader
-                .read_exact(&mut raw)
-                .map_err(|e| classify("reading the message", &e))?;
-            raw
-        } else {
-            let mut raw = Vec::new();
-            read::until(&mut self.reader, b'\n', MAX_BODY, &mut raw)?;
-            while raw.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
-                raw.pop();
-            }
-            raw
-        };
-        arrived(self.peer, &raw).map(Some)
-    }
-}
-
 /// One message, whole; acceptance is at-most-once ([`AT_MOST_ONCE`]).
-fn arrived(peer: SocketAddr, raw: &[u8]) -> Result<Arrived> {
+pub(crate) fn arrived(peer: SocketAddr, raw: &[u8]) -> Result<Arrived> {
     let (header, msg) = message::parse(raw)?;
     Ok(Arrived::whole(
         format!(
@@ -243,10 +221,11 @@ impl Transport for SyslogTransport {
     }
 
     fn waiting(&self) -> transport::Waiting {
-        transport::Waiting::Waits("a read of the socket or the accept waits for a sender")
+        transport::Waiting::Waits("the socket, or the listener and kept connections, wait")
     }
 
-    /// One datagram, or one TCP sender's messages until it closes, from the
+    /// One datagram, or one TCP message from whichever sender sends first —
+    /// one new on the listener, or one whose connection is kept — from the
     /// socket or listener the first receive bound and kept. Acceptance is
     /// at-most-once here: syslog answers no message ([`AT_MOST_ONCE`]).
     fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
@@ -256,13 +235,13 @@ impl Transport for SyslogTransport {
                 Ok(vec![self.receive_datagram(socket)?])
             }
             Carrier::Tcp => {
-                let listener = self.connections.bound(|| self.bind_tcp())?;
-                let mut connection = self.accept_one(listener)?;
-                let mut arrived = Vec::new();
-                while let Some(message) = connection.next_message()? {
-                    arrived.push(message);
-                }
-                Ok(arrived)
+                let arrived = self.connections.next(
+                    || self.bind_tcp(),
+                    self.timeout,
+                    |stream, peer| Ok(Connection::new(stream, peer)),
+                    Connection::turn,
+                )?;
+                Ok(vec![arrived])
             }
         }
     }
@@ -289,18 +268,22 @@ impl Transport for SyslogTransport {
                 self.sender.send_to(&message, address)
             }
             Carrier::Tcp => {
-                // The connect is bounded as well as the reads. It was bare
-                // until 2026-09-21, and a machine out of ephemeral ports
-                // waited without end.
-                let mut stream = socket::connect_tcp(address, self.timeout)?;
                 let mut frame = format!("{} ", message.len()).into_bytes();
                 frame.extend_from_slice(&message);
-                stream
-                    .write_all(&frame)
-                    .map_err(|e| classify("writing the frame", &e))?;
-                stream
-                    .flush()
-                    .map_err(|e| classify("flushing the frame", &e))
+                self.collectors.exchange(
+                    address,
+                    // The connect is bounded as well as the reads. It was
+                    // bare until 2026-09-21, and a machine out of ephemeral
+                    // ports waited without end.
+                    || Ok(Collector(socket::connect_tcp(address, self.timeout)?)),
+                    |collector| {
+                        collector
+                            .0
+                            .write_all(&frame)
+                            .and_then(|()| collector.0.flush())
+                            .map_err(|e| classify("writing the frame", &e))
+                    },
+                )
             }
         }
     }
@@ -464,6 +447,45 @@ mod tests {
         assert_eq!(one.bytes, b"line one");
         assert_eq!(two.bytes, b"line two");
         assert!(connection.next_message().expect("closed").is_none());
+    }
+
+    #[test]
+    fn a_hundred_messages_to_one_collector_open_one_connection_taken_one_a_receive() {
+        // Until 2026-10-21 every send over TCP opened a connection of its
+        // own, and a receive read one connection until its sender closed:
+        // a sender that kept it would have held that receive for good.
+        const ROUNDS: usize = 100;
+        let receiver = SyslogTransport::loopback();
+        let address = receiver
+            .connections
+            .bound(|| receiver.bind_tcp())
+            .expect("bound")
+            .to_string();
+        let sender = std::thread::spawn(move || {
+            let sender = SyslogTransport::loopback();
+            let shared = sender.clone();
+            for round in 0..ROUNDS {
+                let by = if round % 2 == 0 { &sender } else { &shared };
+                by.send(
+                    &format!("syslog+tcp://{address}"),
+                    format!("m{round}").as_bytes(),
+                )
+                .expect("sent");
+            }
+            sender.collectors.opened()
+        });
+        let mut peers = std::collections::BTreeSet::new();
+        for round in 0..ROUNDS {
+            let mut arrived = receiver.receive().expect("received");
+            assert_eq!(arrived.len(), 1, "one message a receive");
+            let taken = arrived.remove(0).taken().expect("taken");
+            assert_eq!(taken.bytes, format!("m{round}").as_bytes());
+            let peer = taken.origin_uri.split('?').next().map(str::to_string);
+            peers.insert(peer.expect("a peer"));
+        }
+        assert_eq!(sender.join().expect("sender"), 1, "one connection");
+        assert_eq!(peers.len(), 1, "every message on the kept connection");
+        assert_eq!(receiver.connections.open(), 1);
     }
 
     #[test]
