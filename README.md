@@ -2,9 +2,9 @@
 
 Syslog transport: one RFC 5424 message is one Stream, the header in the origin; UDP datagrams or TCP with octet counting. A technology of [xmip-core-transport](https://github.com/IlleNilsson/xmip-core-transport).
 
-A Send Location sends from one socket per address family, bound on its first send and kept by the transport and its clones (`transport::sender::Sender`), so an IPv6 target is reached too; until 2026-09-27 every send bound a new IPv4 socket.
+A Send Location sends datagrams from one socket per address family, bound on its first send and kept by the transport and its clones (`transport::sender::Sender`), so an IPv6 target is reached too; until 2026-09-27 every send bound a new IPv4 socket. Over TCP it keeps one connection per collector (`transport::Pool`), message after message; until 2026-10-21 every send opened a connection of its own.
 
-A Receive Location keeps what it binds for its carrier on the first receive (`transport::kept::Kept`), the datagram socket or the listener: what arrives between two receives waits for the next, where until 2026-09-27 each receive bound its own and what came between was lost or refused.
+A Receive Location keeps what it binds for its carrier on the first receive, the datagram socket or the listener: what arrives between two receives waits for the next, where until 2026-09-27 each receive bound its own and what came between was lost or refused. Over TCP it keeps its senders' connections beside the listener (`transport::serving::Serving`, `src/connection.rs`), and each framed message is one receive's turn, from whichever sender sends first; until 2026-10-21 a receive read one connection until its sender closed, which a sender that keeps its connection would never do.
 
 A send target is read by `net::Target` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net), the one reading of a URI every technology calls. Until 2026-09-28 this technology stripped its scheme by hand.
 
@@ -13,9 +13,8 @@ A send target is read by `net::Target` in [xmip-core-library-net](https://github
 Acceptance is at-most-once here. Neither carrier answers a message: a datagram
 has nobody to answer, and RFC 6587 over TCP has no acknowledgement either, so
 the sender is never told how the receive cycle ended and a crash before the
-Stream is durable loses it. Each message arrives whole. A receive takes every message its connection carries, whatever room the
-runtime gives it (`Transport::receive_up_to`): the sender let go of each as
-it sent it, so none can wait at the far end.
+Stream is durable loses it. Each message arrives whole, one a receive; what
+a sender sent meanwhile waits in this side's socket for the next receive.
 
 ## Toolchain
 
