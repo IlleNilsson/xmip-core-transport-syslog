@@ -68,6 +68,9 @@ impl Configured for SyslogTransport {
         ],
     };
 
+    /// The schemes a Location's address is entered with to choose this technology.
+    const SCHEMES: &'static [&'static str] = &["syslog", "syslog+tcp"];
+
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         // A Receive Location reads no header: it names nothing it sends.
         let mut transport = SyslogTransport::new(
