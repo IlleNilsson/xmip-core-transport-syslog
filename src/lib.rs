@@ -45,7 +45,7 @@ use transport::pool::alive;
 use transport::sender::Sender;
 use transport::serving::Serving;
 use transport::socket;
-use transport::{Acknowledgement, Arrived, Directions, Taken, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Taken, Transport};
 use transport::{Pool, Pooled};
 
 /// Why a syslog message cannot be acknowledged after the receive cycle.
@@ -254,7 +254,7 @@ impl Transport for SyslogTransport {
     /// the configured carrier.
     fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
         let bytes: &[u8] = &outgoing.gather()?;
-        let (carrier, address) = match Target::under(&["syslog", "syslog+tcp"], target) {
+        let (carrier, address) = match Target::under(Self::SCHEMES, target) {
             Some(named) if named.is(&["syslog+tcp"]) => (Carrier::Tcp, named.authority()),
             Some(named) => (Carrier::Udp, named.authority()),
             None => (self.carrier, target),
