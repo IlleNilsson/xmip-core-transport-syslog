@@ -7,7 +7,7 @@
 //! Syslog is the operations floor's protocol: every server, switch and
 //! appliance speaks it, over UDP on port 514 or TCP with octet counting (RFC
 //! 6587). A Receive Location listens and takes what the estate reports; a
-//! Send Location writes what a Journey concluded to the collector everything
+//! Send Location writes what a Message concluded to the collector everything
 //! else already goes to. A payload that is already a syslog message is sent
 //! as it is; any other is wrapped in a header naming this node.
 //!
