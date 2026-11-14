@@ -216,6 +216,11 @@ impl Transport for SyslogTransport {
         Directions::BOTH
     }
 
+    /// The callers turned away at their own connection (`transport::serving`).
+    fn turned_away(&self) -> transport::Turned {
+        self.connections.turned_away()
+    }
+
     fn arrivals(&self) -> transport::Arrivals {
         transport::Arrivals::Unordered("each message is its own, at-most-once")
     }
