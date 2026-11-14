@@ -96,6 +96,12 @@ impl Configured for SyslogTransport {
             None => transport,
         })
     }
+
+    /// Each TCP sender's turn on a Receive Location taking at most `turn`.
+    fn turning_within(mut self, turn: std::time::Duration) -> Self {
+        self.connections = self.connections.turning_within(turn);
+        self
+    }
 }
 
 #[cfg(test)]

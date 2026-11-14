@@ -16,19 +16,21 @@ use std::net::{SocketAddr, TcpStream};
 use net::ceiling;
 use net::{MAX_BODY, read};
 use transport::Arrived;
+use transport::deadline::Within;
 use transport::error::{Result, classify, protocol_error};
 use transport::serving::{Open, Turn};
 
-/// One TCP sender's messages, octet-counted or newline-terminated, RFC 6587.
+/// One TCP sender's messages, octet-counted or newline-terminated, RFC 6587,
+/// each read within its turn.
 pub struct Connection {
-    reader: BufReader<TcpStream>,
+    reader: BufReader<Within>,
     peer: SocketAddr,
 }
 
 impl Connection {
     /// A sender's connection from `peer`.
     #[must_use]
-    pub fn new(stream: TcpStream, peer: SocketAddr) -> Self {
+    pub fn new(stream: Within, peer: SocketAddr) -> Self {
         Self {
             reader: BufReader::new(stream),
             peer,
@@ -84,7 +86,7 @@ impl Connection {
 
 impl Open for Connection {
     fn socket(&self) -> &TcpStream {
-        self.reader.get_ref()
+        self.reader.get_ref().socket()
     }
 
     /// A message the last read took beside its own waits in the reader.

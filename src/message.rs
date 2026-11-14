@@ -6,10 +6,9 @@
 //! and MSG is whatever follows the one space after them. This file reads the
 //! header and hands MSG back untouched; MSG is the Stream.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use codec::civil::CivilTime;
 use transport::error::{Result, protocol_error};
+use xcore::{Clock, NANOS_A_SECOND, SystemClock};
 
 /// Everything before MSG.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,12 +175,16 @@ fn nil_if_empty(value: &str) -> String {
 /// Now, as RFC 5424 writes it: `2026-09-08T10:30:00.123456Z`.
 #[must_use]
 fn timestamp_now() -> String {
-    let now = SystemTime::now();
-    let micros = now
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_micros();
-    let whole = CivilTime::from_system_time(now).rfc3339();
+    timestamp(SystemClock.unix_timestamp_nanos())
+}
+
+/// The moment `unix_nanos` after the epoch as RFC 5424 writes it: to the
+/// microsecond, the finest its `TIME-SECFRAC` takes.
+#[must_use]
+fn timestamp(unix_nanos: i128) -> String {
+    let seconds = i64::try_from(unix_nanos.div_euclid(NANOS_A_SECOND)).unwrap_or(0);
+    let micros = unix_nanos.rem_euclid(NANOS_A_SECOND) / 1_000;
+    let whole = CivilTime::from_unix(seconds).rfc3339();
     format!("{}.{micros:06}Z", whole.trim_end_matches('Z'))
 }
 
@@ -232,6 +235,10 @@ mod tests {
         assert_eq!(now.len(), "2026-08-29T10:40:00.000000Z".len(), "{now}");
         assert_eq!(&now[10..11], "T");
         assert!(now.ends_with('Z'));
+        assert_eq!(
+            timestamp(1_800_000_000_123_456_789),
+            "2027-01-15T08:00:00.123456Z"
+        );
         assert_eq!(Header::now(1, 6, "", "").hostname, "-");
     }
 }

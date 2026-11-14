@@ -37,6 +37,7 @@ pub use connection::Connection;
 pub use message::Header;
 use net::Target;
 use transport::ArrivalIdentity;
+use transport::deadline::Within;
 use transport::error::{Result, classify, protocol_error};
 use transport::kept::Kept;
 use transport::listening::{Accepting, Listening};
@@ -178,7 +179,7 @@ impl SyslogTransport {
     /// Where the connection could not be accepted.
     pub fn accept_one(&self, listener: &TcpListener) -> Result<Connection> {
         let (stream, peer) = socket::accept_tcp(listener, self.timeout)?;
-        Ok(Connection::new(stream, peer))
+        Ok(Connection::new(Within::new(stream), peer))
     }
 
     /// `bytes` as a syslog message: as they are when they already are one,
