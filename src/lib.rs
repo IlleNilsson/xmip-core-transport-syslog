@@ -138,13 +138,6 @@ impl SyslogTransport {
         self
     }
 
-    /// Give up waiting for a message after `timeout`.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
     /// Bind the UDP socket and report the address actually assigned.
     ///
     /// # Errors

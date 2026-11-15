@@ -57,19 +57,21 @@ impl Configured for SyslogTransport {
                 meaning: "The severity a wrapped payload is sent under.",
                 applies: Applies::Send,
             },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Optional,
-                meaning: "How long a message or a connection is waited for; unbounded when left \
-                          out.",
-                applies: Applies::Both,
-            },
+            transport::configured::timeout(
+                Applies::Both,
+                None,
+                "How long a message or a connection is waited for; unbounded when left \
+                 out.",
+            ),
         ],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["syslog", "syslog+tcp"];
+
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.timeout)
+    }
 
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         // A Receive Location reads no header: it names nothing it sends.
@@ -91,10 +93,7 @@ impl Configured for SyslogTransport {
         let facility = priority("facility", FACILITY)?;
         let severity = priority("severity", SEVERITY)?;
         transport = transport.as_priority(facility, severity);
-        Ok(match settings.optional_duration("timeout") {
-            Some(timeout) => transport.timing_out_after(timeout),
-            None => transport,
-        })
+        Ok(transport)
     }
 
     /// Each TCP sender's turn on a Receive Location taking at most `turn`.
