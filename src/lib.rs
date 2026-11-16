@@ -83,7 +83,7 @@ pub struct SyslogTransport {
     /// The connection kept to each collector over TCP, shared by every
     /// clone.
     collectors: Pool<Collector>,
-    /// What the first receive binds for the carrier, and every receive
+    /// What its open binds for the carrier, and every receive
     /// takes from: the datagram socket, or the listener and the senders'
     /// connections kept open on it.
     datagrams: Kept<UdpSocket>,
@@ -225,17 +225,16 @@ impl Transport for SyslogTransport {
 
     /// One datagram, or one TCP message from whichever sender sends first —
     /// one new on the listener, or one whose connection is kept — from the
-    /// socket or listener the first receive bound and kept. Acceptance is
+    /// socket or listener its open bound and kept. Acceptance is
     /// at-most-once here: syslog answers no message ([`AT_MOST_ONCE`]).
     fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         match self.carrier {
             Carrier::Udp => {
-                let socket = self.datagrams.bound(|| self.bind_udp())?;
+                let socket = self.datagrams.listener()?;
                 Ok(vec![self.receive_datagram(socket)?])
             }
             Carrier::Tcp => {
                 let arrived = self.connections.next(
-                    || self.bind_tcp(),
                     self.timeout,
                     |stream, peer| Ok(Connection::new(stream, peer)),
                     Connection::turn,

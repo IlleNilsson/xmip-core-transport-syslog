@@ -107,6 +107,15 @@ impl Configured for SyslogTransport {
         self.connections = self.connections.timed_by(clock);
         self
     }
+
+    /// What every receive takes from, bound where a Receive Location
+    /// listens on its carrier: a datagram socket, or a listener over TCP.
+    fn listening(&self) -> Result<Option<&str>> {
+        match self.carrier {
+            Carrier::Udp => self.datagrams.listening(|| self.bind_udp()),
+            Carrier::Tcp => self.connections.bound(|| self.bind_tcp()).map(Some),
+        }
+    }
 }
 
 #[cfg(test)]
