@@ -24,51 +24,66 @@
 //! message; a Receive Location keeps its senders' connections beside its
 //! listener, each framed message one turn ([`connection`]). Until
 //! 2026-10-21 every send opened a connection of its own.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "default")]
 pub mod connection;
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod message;
+#[cfg(feature = "default")]
 mod settings;
 
+#[cfg(feature = "default")]
 use std::io::Write;
+#[cfg(feature = "default")]
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+#[cfg(feature = "default")]
 use std::time::Duration;
 
+#[cfg(feature = "default")]
 pub use connection::Connection;
+#[cfg(feature = "default")]
+use declaration::{FACILITY, SEVERITY};
+#[cfg(feature = "default")]
 pub use message::Header;
+#[cfg(feature = "default")]
 use net::Target;
-use transport::ArrivalIdentity;
-use transport::deadline::Within;
+#[cfg(feature = "default")]
 use transport::error::{Result, classify, protocol_error};
-use transport::kept::Kept;
+#[cfg(feature = "default")]
 use transport::listening::{Accepting, Listening};
+#[cfg(feature = "default")]
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::pool::alive;
-use transport::sender::Sender;
-use transport::serving::Serving;
-use transport::socket;
-use transport::{Acknowledgement, Arrived, Configured, Directions, Taken, Transport};
-use transport::{Pool, Pooled};
+#[cfg(feature = "default")]
+use transport::{
+    Acknowledgement, ArrivalIdentity, Arrived, Configured, Directions, Pool, Pooled, Taken,
+    Transport, deadline::Within, kept::Kept, pool::alive, sender::Sender, serving::Serving, socket,
+};
 
 /// Why a syslog message cannot be acknowledged after the receive cycle.
+#[cfg(feature = "default")]
 pub const AT_MOST_ONCE: &str = "syslog answers no message: a datagram has nobody to answer, and \
                                 RFC 6587 over TCP has no acknowledgement";
 
 /// The largest datagram a syslog receiver must take, RFC 5426.
+#[cfg(feature = "default")]
 pub const MAX_DATAGRAM: usize = 65_535;
-/// The facility a wrapped payload is sent under unless told otherwise: 16,
-/// local0.
-pub const FACILITY: u8 = 16;
-/// The severity a wrapped payload is sent under unless told otherwise: 6,
-/// informational.
-pub const SEVERITY: u8 = 6;
 
 /// UDP datagrams, or TCP with octet counting.
+#[cfg(feature = "default")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Carrier {
     Udp,
     Tcp,
 }
 
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct SyslogTransport {
     bind: String,
@@ -92,8 +107,10 @@ pub struct SyslogTransport {
 
 /// A Send Location's connection to one collector over TCP, kept between
 /// its messages.
+#[cfg(feature = "default")]
 struct Collector(TcpStream);
 
+#[cfg(feature = "default")]
 impl Pooled for Collector {
     /// A collector answers nothing, so only its close lets the connection
     /// go: a write to it could succeed and be lost.
@@ -102,6 +119,7 @@ impl Pooled for Collector {
     }
 }
 
+#[cfg(feature = "default")]
 impl SyslogTransport {
     /// Listen at `bind` over UDP; `0.0.0.0:514` is the standard port.
     /// Messages sent name `hostname` and `app_name`, under [`FACILITY`] and
@@ -188,6 +206,7 @@ impl SyslogTransport {
 }
 
 /// One message, whole; acceptance is at-most-once ([`AT_MOST_ONCE`]).
+#[cfg(feature = "default")]
 pub(crate) fn arrived(peer: SocketAddr, raw: &[u8]) -> Result<Arrived> {
     let (header, msg) = message::parse(raw)?;
     Ok(Arrived::whole(
@@ -201,6 +220,7 @@ pub(crate) fn arrived(peer: SocketAddr, raw: &[u8]) -> Result<Arrived> {
     .from_peer(peer))
 }
 
+#[cfg(feature = "default")]
 impl Transport for SyslogTransport {
     fn name(&self) -> &'static str {
         "syslog"
@@ -287,6 +307,7 @@ impl Transport for SyslogTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl SyslogTransport {
     /// Both ends on this machine: a collector over TCP with octet counting
     /// on an ephemeral local port — the carrier that holds a megabyte; the
@@ -300,6 +321,7 @@ impl SyslogTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Accepting for SyslogTransport {
     fn take_one(self, listener: &TcpListener) -> Result<Taken> {
         let mut connection = self.accept_one(listener)?;
@@ -310,6 +332,7 @@ impl Accepting for SyslogTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Loopback for SyslogTransport {
     fn arrival_identity(&self) -> ArrivalIdentity {
         ArrivalIdentity::PEER

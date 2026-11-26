@@ -1,73 +1,17 @@
-//! The settings a syslog Location takes, and the one way a transport is
-//! built from them (ADR-0064, amendment 2026-09-26).
+//! The one way a syslog transport is built from the settings its
+//! declaration names (`crate::declaration`; ADR-0064, amendments 2026-09-26
+//! and 2026-11-26).
 
 use transport::Configured;
 use transport::error::{Result, protocol_error};
-use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
+use xcore::settings::{Read, Settings};
 
-use crate::{Carrier, FACILITY, SEVERITY, SyslogTransport};
+use crate::declaration::{self, FACILITY, SEVERITY};
+use crate::{Carrier, SyslogTransport};
 
 impl Configured for SyslogTransport {
-    /// The address is where a Receive Location listens; a Send Location's
-    /// collector is each send's target. The header a wrapped payload is sent
-    /// under is read here, never parsed from the target.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "carrier",
-                kind: Kind::Choice {
-                    choices: &["udp", "tcp"],
-                },
-                presence: Presence::Optional,
-                meaning: "UDP datagrams, or TCP with octet counting; UDP when left out.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "hostname",
-                kind: Kind::Text,
-                presence: Presence::Required,
-                meaning: "The HOSTNAME a wrapped payload's header names this node by.",
-                applies: Applies::Send,
-            },
-            Setting {
-                name: "app_name",
-                kind: Kind::Text,
-                presence: Presence::Default(Fixed::Text("xmip")),
-                meaning: "The APP-NAME a wrapped payload's header names.",
-                applies: Applies::Send,
-            },
-            Setting {
-                name: "facility",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 23,
-                },
-                presence: Presence::Default(Fixed::Integer(FACILITY as i64)),
-                meaning: "The facility a wrapped payload is sent under.",
-                applies: Applies::Send,
-            },
-            Setting {
-                name: "severity",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 7,
-                },
-                presence: Presence::Default(Fixed::Integer(SEVERITY as i64)),
-                meaning: "The severity a wrapped payload is sent under.",
-                applies: Applies::Send,
-            },
-            transport::configured::timeout(
-                Applies::Both,
-                None,
-                "How long a message or a connection is waited for; unbounded when left \
-                 out.",
-            ),
-        ],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["syslog", "syslog+tcp"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
         Some(&mut self.timeout)
@@ -122,7 +66,7 @@ impl Configured for SyslogTransport {
 mod tests {
     use super::*;
     use std::time::Duration;
-    use xcore::settings::Given;
+    use xcore::settings::{Applies, Given};
 
     #[test]
     fn syslog_declares_its_settings_and_reads_through_them() {
